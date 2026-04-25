@@ -2,18 +2,23 @@
 
 const express = require('express');
 const { spawn } = require('child_process');
+const https = require('https');
+const fs = require('fs');
 require('dotenv').config();
 
-if (!process.env.NGROK_URL) {
-  console.warn('[Config] Warning: NGROK_URL is not set in .env');
-}
-
 const config = {
-  ngrokUrl:     process.env.NGROK_URL || 'https://YOUR-NGROK-URL.ngrok-free.app',
-  port:         process.env.PORT || 3000,
-  ffmpegDevice: 'CABLE Output (VB-Audio Virtual Cable)',
+  baseUrl:      process.env.BASE_URL      || 'https://your-tunnel-url.example.com',
+  streamBaseUrl:process.env.STREAM_BASE_URL || process.env.BASE_URL || 'https://your-tunnel-url.example.com',
+  port:         process.env.PORT          || 3000,
+  httpsPort:    process.env.HTTPS_PORT    || 443,
+  ffmpegDevice: process.env.FFMPEG_DEVICE || 'CABLE Output (VB-Audio Virtual Cable)',
+  certPath:     process.env.CERT_PATH     || null,
   streamPath:   '/stream',
 };
+
+if (!process.env.BASE_URL) {
+  console.warn('[Config] Warning: BASE_URL is not set in .env');
+}
 
 let ffmpegProcess = null;
 let streamClients = [];
@@ -99,7 +104,7 @@ app.get(config.streamPath, (req, res) => {
 
 app.get('/start', (req, res) => {
   startFFmpeg();
-  res.send('FFmpeg started. Connect to ' + config.ngrokUrl + config.streamPath);
+  res.send('FFmpeg started. Stream at ' + config.streamBaseUrl + config.streamPath);
 });
 
 app.get('/stop', (req, res) => {
@@ -108,7 +113,7 @@ app.get('/stop', (req, res) => {
 });
 
 app.get('/', (req, res) => {
-  const streamUrl = `${config.ngrokUrl}${config.streamPath}`;
+  const streamUrl = `${config.streamBaseUrl}${config.streamPath}`;
   const isRunning = !!ffmpegProcess;
 
   res.send(`<!DOCTYPE html>
@@ -160,7 +165,7 @@ app.post('/alexa', (req, res) => {
   console.log(`[Alexa] ${reqType}${intentName ? ' / ' + intentName : ''}`);
 
   function playResponse(speechText) {
-    const streamUrl = `${config.ngrokUrl}${config.streamPath}`;
+    const streamUrl = `${config.streamBaseUrl}${config.streamPath}`;
     return {
       version: '1.0',
       response: {
@@ -250,11 +255,25 @@ app.listen(config.port, () => {
   console.log('='.repeat(60));
   console.log(' PC → Alexa Audio Stream Server');
   console.log('='.repeat(60));
-  console.log(` Local:      http://localhost:${config.port}`);
-  console.log(` Stream:     http://localhost:${config.port}${config.streamPath}`);
-  console.log(` Ngrok URL:  ${config.ngrokUrl}`);
-  console.log(` Alexa POST: ${config.ngrokUrl}/alexa`);
+  console.log(` HTTP:       http://localhost:${config.port}`);
+  console.log(` Stream:     ${config.streamBaseUrl}${config.streamPath}`);
+  console.log(` Alexa POST: ${config.baseUrl}/alexa`);
   console.log('='.repeat(60));
   console.log('[Boot] Pre-starting FFmpeg capture...');
   startFFmpeg();
 });
+
+// Optional HTTPS server — only starts if CERT_PATH is set in .env
+if (config.certPath) {
+  try {
+    const tlsOptions = {
+      cert: fs.readFileSync(`${config.certPath}/fullchain.pem`),
+      key:  fs.readFileSync(`${config.certPath}/privkey.pem`),
+    };
+    https.createServer(tlsOptions, app).listen(config.httpsPort, () => {
+      console.log(`[HTTPS] Listening on port ${config.httpsPort}`);
+    });
+  } catch (err) {
+    console.error('[HTTPS] Failed to load cert:', err.message);
+  }
+}
